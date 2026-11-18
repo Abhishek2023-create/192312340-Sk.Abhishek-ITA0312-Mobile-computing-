@@ -1,0 +1,60 @@
+name: Generate verified assignment output screenshots
+on:
+  push:
+    paths:
+      - '.github/workflows/generate-assignment-outputs.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  outputs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install Pillow
+      - name: Execute programs and render output screenshots
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess, sys, textwrap
+          from PIL import Image, ImageDraw, ImageFont
+          fonts = ['/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf']
+          font = ImageFont.truetype(fonts[0], 18)
+          bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf', 20)
+          scripts = sorted(Path('assignment 1').rglob('question_*.py')) + sorted(Path('assignment 2').rglob('question_*.py'))
+          assert len(scripts) == 19, f'Expected 19 scripts, found {len(scripts)}: {scripts}'
+          for script in scripts:
+              proc = subprocess.run([sys.executable, script.name], cwd=script.parent, capture_output=True, text=True, timeout=90)
+              output = (proc.stdout + proc.stderr).strip()
+              if proc.returncode:
+                  raise RuntimeError(f'{script} failed: {output}')
+              lines = [f'$ python {script.name}', ''] + (output.splitlines() or ['(no output)']) + ['', 'Process finished with exit code 0']
+              wrapped = []
+              for line in lines:
+                  wrapped.extend(textwrap.wrap(line, width=100, replace_whitespace=False, drop_whitespace=False) or [''])
+              width = 1300
+              height = max(270, 95 + 29 * len(wrapped))
+              image = Image.new('RGB', (width, height), '#111827')
+              draw = ImageDraw.Draw(image)
+              draw.rounded_rectangle((12, 12, width-12, height-12), radius=16, fill='#17212f')
+              draw.rounded_rectangle((12, 12, width-12, 65), radius=16, fill='#263445')
+              draw.rectangle((12, 48, width-12, 65), fill='#263445')
+              draw.text((32, 29), f'Actual Python output — {script.parent.parent.name} / {script.parent.name}', font=bold, fill='#ffffff')
+              for i, line in enumerate(wrapped):
+                  draw.text((34, 83 + 29*i), line, font=font, fill=('#a7f3d0' if i==0 else '#e5e7eb'))
+              output_path = script.parent / 'output.png'
+              image.save(output_path)
+              print(f'{script}: PASS -> {output_path}')
+          PY
+      - name: Commit screenshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'assignment 1' 'assignment 2'
+          if ! git diff --cached --quiet; then
+            git commit -m "Add actual Python execution screenshots for both assignments"
+            git push
+          fi
